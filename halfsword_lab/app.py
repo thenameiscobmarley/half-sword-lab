@@ -1,8 +1,6 @@
-"""Half Sword Lab terminal GUI (Textual)."""
+"""Half Sword Lab terminal GUI (Textual): sidebar dashboard with a landing page."""
 from __future__ import annotations
 
-import io
-import json
 import shutil
 import subprocess
 import tarfile
@@ -15,22 +13,38 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
 from textual.theme import Theme
-from textual.widgets import (Button, DataTable, Footer, Header, Input, Label, OptionList, RichLog, Select,
+from textual.widgets import (Button, ContentSwitcher, DataTable, Footer, Input, Label, OptionList, RichLog, Select,
                              Static, Switch, TabbedContent, TabPane)
 from textual.widgets.option_list import Option
 
 from . import game as g
 from .bridge import Bridge
 from .demo import DemoBridge
+from .demo_save import make_demo_save
 from .mods import EXCLUSIVE, GRAVITY, MODS
+from .saveui import SaveEditor
 from .tags import CYAN, DIM, MUTED, VIOLET, char_tags, group_of, tag, tagged
+from .widgets import BackupPrompt, Confirm, EditValue
+
+VERSION = "0.3.0"
+DEMO_SAVES = Path.home() / ".cache" / "half-sword-lab" / "demo" / "Local" / "HalfSwordUE5" / "Saved" / "SaveGames"
 
 THEME = Theme(
-    name="ui-vault", primary=VIOLET, secondary=CYAN, accent=CYAN, background="#08080d", surface="#12121b",
-    panel="#181824", foreground="#ececf4", warning="#facc15", error="#f43f5e", success="#34d399", dark=True,
+    name="hsl-dashboard", primary=VIOLET, secondary=CYAN, accent=CYAN, background="#0b0b12", surface="#13131d",
+    panel="#1a1a27", foreground="#ececf4", warning="#facc15", error="#f43f5e", success="#34d399", dark=True,
 )
+
+# (page id, sidebar label, title, subtitle, available in the save-only edition)
+PAGES = [
+    ("home", "⌂  Home", "Welcome back", "Pick what you want to do.", True),
+    ("saves", "▤  Save Editor", "Save Editor", "Edit your save files with the game closed. Nothing is installed.", True),
+    ("live", "⚔  Live Lab", "Live Lab", "Change characters while you play (needs the Lab DLL).", False),
+    ("mods", "✦  Mods", "Mods", "World mods applied live by the Lab DLL.", False),
+    ("backups", "⛨  Backups", "Backups", "Newest first. Restoring always makes a safety backup first.", True),
+    ("setup", "⚙  Setup", "Setup", "Put the Lab DLL into the game, or take it out again.", False),
+    ("log", "≡  Log", "Log", "What the Lab and the game reported.", True),
+]
 
 BODY = [
     ("scale", "Size", [("Pocket", 0.35), ("Small", 0.7), ("Normal", 1), ("Big", 1.5), ("Giant", 3)]),
@@ -39,7 +53,7 @@ BODY = [
 ]
 
 
-def human_size(n: int) -> str:
+def human_size(n: float) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
             return f"{n:.0f} {unit}"
@@ -55,98 +69,24 @@ def human_age(t: float) -> str:
     return "just now"
 
 
-class BackupPrompt(ModalScreen[str]):
-    """Asked before every change: back up first, apply without a backup, or cancel."""
-    BINDINGS = [Binding("y", "pick('yes')", "Yes"), Binding("n", "pick('no')", "No"),
-                Binding("escape", "pick('cancel')", "Cancel")]
-
-    def __init__(self, change: str):
-        super().__init__()
-        self.change = change
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dialog"):
-            yield Label(Text("Make Backup Before Applying Changes?", style=f"bold {CYAN}"))
-            yield Static(Text.assemble(("Change: ", MUTED), (self.change, "bold")), classes="change")
-            with Horizontal(classes="row"):
-                yield Button("Yes, back up first (Y)", id="yes", variant="primary")
-                yield Button("No, just apply (N)", id="no")
-                yield Button("Cancel (Esc)", id="cancel")
-
-    def on_button_pressed(self, e: Button.Pressed) -> None:
-        self.dismiss(e.button.id)
-
-    def action_pick(self, choice: str) -> None:
-        self.dismiss(choice)
-
-
-class EditValue(ModalScreen[str | None]):
-    def __init__(self, title: str, value, kind: str):
-        super().__init__()
-        self.title_text, self.value, self.kind = title, value, kind
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dialog"):
-            yield Label(Text.assemble(("Edit  ", MUTED), (self.title_text, f"bold {CYAN}")))
-            if self.kind == "bool":
-                with Horizontal(classes="row"):
-                    yield Button("true", id="v-true", variant="success")
-                    yield Button("false", id="v-false", variant="error")
-                    yield Button("Cancel", id="cancel")
-            else:
-                yield Input(str(self.value), id="value", type="number")
-                with Horizontal(classes="row"):
-                    yield Button("Save", id="save", variant="primary")
-                    yield Button("Cancel", id="cancel")
-
-    def on_button_pressed(self, e: Button.Pressed) -> None:
-        if e.button.id == "save":
-            self.dismiss(self.query_one("#value", Input).value)
-        elif e.button.id in ("v-true", "v-false"):
-            self.dismiss(e.button.id[2:])
-        else:
-            self.dismiss(None)
-
-    def on_input_submitted(self, e: Input.Submitted) -> None:
-        self.dismiss(e.value)
-
-    def key_escape(self) -> None:
-        self.dismiss(None)
-
-
-class Confirm(ModalScreen[bool]):
-    def __init__(self, question: str):
-        super().__init__()
-        self.question = question
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dialog"):
-            yield Label(self.question)
-            with Horizontal(classes="row"):
-                yield Button("Yes", id="yes", variant="error")
-                yield Button("No", id="no")
-
-    def on_button_pressed(self, e: Button.Pressed) -> None:
-        self.dismiss(e.button.id == "yes")
-
-    def key_escape(self) -> None:
-        self.dismiss(False)
-
-
 class LabApp(App):
-    TITLE = "⚔  HALF SWORD LAB"
+    TITLE = "Half Sword Lab"
     CSS_PATH = "lab.tcss"
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("b", "backup", "Backup saves"),
-        Binding("d", "dump", "Dump for Claude"),
-        Binding("f8", "panic", "Panic reset"),
+        Binding("d", "dump", "Dump for Claude", show=False),
+        Binding("f8", "panic", "Panic reset", show=False),
+        *[Binding(str(i + 1), f"go_index({i})", show=False) for i in range(len(PAGES))],
     ]
 
-    def __init__(self, demo: bool = False):
+    def __init__(self, demo: bool = False, saves_only: bool = False):
         super().__init__()
         self.demo = demo
+        self.saves_only = saves_only
+        self.pages = [p for p in PAGES if p[4] or not saves_only]
         self.backups_dir = g.BACKUPS / "demo" if demo else g.BACKUPS
+        self.custom_save_dir: Path | None = None
         self.game: g.GameInstall | None = None
         self.bridge: Bridge | DemoBridge | None = None
         self.state: dict | None = None
@@ -161,66 +101,105 @@ class LabApp(App):
         self.backed_up = False
 
     # ------------------------------------------------------------------ layout
-    def btn(self, label: str, bid: str, fn, variant: str = "default", classes: str = "") -> Button:
+    def btn(self, label: str, bid: str, fn, variant: str = "default") -> Button:
         self.actions[bid] = fn
-        return Button(label, id=bid, variant=variant, classes=classes)
+        return Button(label, id=bid, variant=variant, compact=True)
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        with TabbedContent(id="main"):
-            with TabPane("Characters", id="tab-chars"):
-                with Horizontal():
-                    with Vertical(id="left"):
-                        yield Static(Text("CHARACTERS", style=f"bold {MUTED}"), classes="h")
-                        yield OptionList(id="chars")
-                        yield Static("", id="world")
-                    with Vertical(id="right"):
-                        yield Static("", id="char-title")
-                        with TabbedContent(id="char-tabs"):
-                            with TabPane("Body", id="t-body"):
-                                yield from self.compose_body()
-                            with TabPane("Stats", id="t-stats"):
-                                yield Input(placeholder="filter stats (health, team, armor...)", id="stat-filter")
-                                yield DataTable(id="stats", cursor_type="row", zebra_stripes=True)
-                                yield Static("Enter on a stat to edit it. Values are live from the game.", classes="hint")
-                            with TabPane("Armor", id="t-armor"):
-                                yield from self.compose_gear("armor", "armor")
-                            with TabPane("Weapons", id="t-weapons"):
-                                yield from self.compose_gear("weapons", "weapon")
-                            with TabPane("Coins", id="t-coins"):
-                                yield from self.compose_coins()
-                            with TabPane("Goofy", id="t-goofy"):
-                                yield from self.compose_goofy()
-            with TabPane("Mods", id="tab-mods"):
-                yield from self.compose_mods()
-            with TabPane("Backups", id="tab-backups"):
-                yield from self.compose_backups()
-            with TabPane("Setup", id="tab-setup"):
-                yield from self.compose_setup()
-            with TabPane("Log", id="tab-log"):
-                yield RichLog(id="log", wrap=True, markup=False)
+        with Horizontal(id="shell"):
+            with Vertical(id="sidebar"):
+                brand = Text("⚔  HALF SWORD LAB", style=f"bold {VIOLET}")
+                brand.append(f"\n   {'save editor edition' if self.saves_only else 'trainer + mod lab'}", style=DIM)
+                yield Static(brand, id="brand")
+                yield OptionList(*[Option(label, id=pid) for pid, label, *_ in self.pages], id="nav")
+                yield Static("", id="side-status")
+            with Vertical(id="main"):
+                yield Static("", id="page-title")
+                with ContentSwitcher(id="pages", initial="home"):
+                    with VerticalScroll(id="home"):
+                        yield from self.compose_home()
+                    yield SaveEditor(id="saves")
+                    if not self.saves_only:
+                        with Horizontal(id="live"):
+                            yield from self.compose_live()
+                        with VerticalScroll(id="mods"):
+                            yield from self.compose_mods()
+                    with Vertical(id="backups"):
+                        yield from self.compose_backups()
+                    if not self.saves_only:
+                        with VerticalScroll(id="setup"):
+                            yield from self.compose_setup()
+                    yield RichLog(id="log", wrap=True, markup=False)
         yield Footer()
+
+    def compose_home(self) -> ComposeResult:
+        cards = [("saves", "▤  Save Editor", "Edit coins, stats and mercenaries in your save files. "
+                  "Game closed, nothing installed.", "Open Save Editor")]
+        if not self.saves_only:
+            cards.append(("live", "⚔  Live Lab", "Change size, weight, gear and more while you play. "
+                          "Uses the Lab DLL and the \\ in-game menu.", "Open Live Lab"))
+        cards.append(("backups", "⛨  Backups", "Every change can be backed up first. Restore any of them here.",
+                      "View backups"))
+        if not self.saves_only:
+            cards.append(("setup", "⚙  Setup", "Copy the Lab DLL into the game, or remove it again.", "Open Setup"))
+        with Grid(id="cards", classes=f"n{len(cards)}"):
+            for pid, title, desc, action in cards:
+                with Vertical(classes="card", id=f"card-{pid}"):
+                    yield Static(Text(title, style="bold"), classes="card-title")
+                    yield Static(Text(desc, style=MUTED), classes="card-desc")
+                    yield Static("", id=f"stat-{pid}", classes="card-stat")
+                    yield self.btn(action + "  →", f"go-{pid}", lambda p=pid: self.go(p), "primary")
+        yield Static(Text("RECENT BACKUPS", style=f"bold {MUTED}"), classes="section")
+        yield DataTable(id="home-backups", cursor_type="none", show_header=False)
+        tip = ("Tip: the Save Editor works on any Unreal save. Keys 1-4 jump between pages." if self.saves_only else
+               "Tip: in game, press \\ for the Lab menu and F8 to undo everything the Lab changed. "
+               "Keys 1-7 jump between pages here.")
+        yield Static(tip, classes="hint")
+
+    def compose_live(self) -> ComposeResult:
+        with Vertical(id="char-col", classes="panel"):
+            yield Static(Text("CHARACTERS", style=f"bold {MUTED}"), classes="section")
+            yield OptionList(id="chars")
+            yield Static("", id="world")
+        with Vertical(id="char-main"):
+            yield Static("", id="char-title")
+            with TabbedContent(id="char-tabs"):
+                with TabPane("Body", id="t-body"):
+                    yield from self.compose_body()
+                with TabPane("Stats", id="t-stats"):
+                    yield Input(placeholder="filter stats (health, team, armor...)", id="stat-filter", compact=True)
+                    yield DataTable(id="stats", cursor_type="row", zebra_stripes=True)
+                    yield Static("Enter on a stat to edit it. Values are live from the game.", classes="hint")
+                with TabPane("Armor", id="t-armor"):
+                    yield from self.compose_gear("armor", "armor")
+                with TabPane("Weapons", id="t-weapons"):
+                    yield from self.compose_gear("weapons", "weapon")
+                with TabPane("Coins", id="t-coins"):
+                    yield from self.compose_coins()
+                with TabPane("Goofy", id="t-goofy"):
+                    yield from self.compose_goofy()
 
     def compose_body(self) -> ComposeResult:
         with VerticalScroll():
             yield Static("", id="body-info")
             for verb, label, presets in BODY:
-                with Horizontal(classes="row"):
+                with Horizontal(classes="bar"):
                     yield Label(label, classes="lbl")
-                    yield Input(placeholder="1.0", id=f"in-{verb}", classes="num", type="number", valid_empty=True)
+                    yield Input(placeholder="1.0", id=f"in-{verb}", classes="num", type="number", valid_empty=True,
+                                compact=True)
                     yield self.btn("Set", f"set-{verb}", lambda v=verb: self.apply_input(v), "primary")
                     for name, val in presets:
                         yield self.btn(name, f"p-{verb}-{name.lower()}",
                                        lambda v=verb, x=val, n=name, l=label: self.char_cmd(f"{l}: {n}", v, x))
             yield Static("Weight is a physics mass multiplier: heavier hits harder and is harder to push. "
                          "Speed is per-character time, so 2.0 means twice as fast at everything.", classes="hint")
-            with Horizontal(classes="row"):
+            with Horizontal(classes="bar"):
                 yield self.btn("Reset this character", "reset-char", lambda: self.char_cmd("Reset character", "reset"),
                                "warning")
 
     def compose_gear(self, key: str, kind: str) -> ComposeResult:
         yield DataTable(id=f"gear-{key}", cursor_type="row", zebra_stripes=True)
-        with Horizontal(classes="row"):
+        with Horizontal(classes="bar"):
             big = 2.5 if kind == "armor" else 3
             yield self.btn("Giant", f"{key}-huge", lambda: self.gear_cmd(key, "Giant", "scale", big))
             yield self.btn("Tiny", f"{key}-tiny", lambda: self.gear_cmd(key, "Tiny", "scale", 0.4))
@@ -231,112 +210,137 @@ class LabApp(App):
             yield self.btn("Hide", f"{key}-hide", lambda: self.gear_cmd(key, "Hide", "hide"))
             yield self.btn("Show", f"{key}-show", lambda: self.gear_cmd(key, "Show", "show"))
             yield self.btn("Remove", f"{key}-vanish", lambda: self.gear_cmd(key, "Remove", "vanish"), "error")
-        with Horizontal(classes="row"):
-            yield Select([], prompt=f"spawn {kind}...", id=f"spawn-{key}", classes="spawn")
-            yield Input("1", id=f"count-{key}", classes="count", type="integer", valid_empty=True)
+        with Horizontal(classes="bar"):
+            yield Select([], prompt=f"spawn {kind}...", id=f"spawn-{key}", classes="spawn", compact=True)
+            yield Input("1", id=f"count-{key}", classes="count", type="integer", valid_empty=True, compact=True)
             yield self.btn("Spawn near", f"{key}-spawn", lambda: self.spawn(key), "primary")
-        yield Static(f"{kind.title()} on this character. Remove deletes the piece, Hide only hides it. "
-                     "Spawned items drop next to the character.", classes="hint")
 
     def compose_coins(self) -> ComposeResult:
         yield DataTable(id="coins", cursor_type="row", zebra_stripes=True)
-        with Horizontal(classes="row"):
+        with Horizontal(classes="bar"):
             yield self.btn("+100", "coin-100", lambda: self.coin_add(100))
             yield self.btn("+1,000", "coin-1000", lambda: self.coin_add(1000))
             yield self.btn("Set 99,999", "coin-max", lambda: self.coin_set(99999), "primary")
-            yield self.btn("Edit...", "coin-edit", self.coin_edit)
-        yield Static("Coin values are found by name (gold, coins, money, florins...) on the game instance, "
-                     "game state, player and save objects. Save in-game afterwards to keep them.", classes="hint")
+            yield self.btn("Edit…", "coin-edit", self.coin_edit)
+        yield Static("Coin values are found by name (gold, coins, money, florins...). Save in-game afterwards to "
+                     "keep them, or use the Save Editor with the game closed.", classes="hint")
 
     def compose_goofy(self) -> ComposeResult:
         with Grid(id="goofy"):
             for i, (label, verb, *args) in enumerate([
-                ("🚀 Launch to the sky", "launch", 2500), ("🧬 Clone", "clone", 1), ("👥 Clone army (x6)", "clone", 6),
-                ("🧲 Bring to me", "bring"), ("🌀 Teleport me there", "visit"), ("🗿 Freeze", "speed", 0.02),
-                ("☕ Hyper", "speed", 3), ("🐜 Ant", "scale", 0.2), ("🏔 Colossus", "scale", 4),
-                ("🎈 Balloon (weightless)", "mass", 0.05), ("👻 Invisible", "hide"), ("👁 Visible", "show"),
+                ("Launch to the sky", "launch", 2500), ("Clone", "clone", 1), ("Clone army (x6)", "clone", 6),
+                ("Bring to me", "bring"), ("Teleport me there", "visit"), ("Freeze", "speed", 0.02),
+                ("Hyper", "speed", 3), ("Ant", "scale", 0.2), ("Colossus", "scale", 4),
+                ("Balloon (weightless)", "mass", 0.05), ("Invisible", "hide"), ("Visible", "show"),
             ]):
-                yield self.btn(label, f"g-{i}", lambda l=label, v=verb, a=args: self.char_cmd(l[2:], v, *a))
-            yield self.btn("💨 Vanish", "g-vanish", self.vanish_char, "error")
+                yield self.btn(label, f"g-{i}", lambda l=label, v=verb, a=args: self.char_cmd(l, v, *a))
+            yield self.btn("Vanish", "g-vanish", self.vanish_char, "error")
 
     def compose_mods(self) -> ComposeResult:
-        with VerticalScroll(id="mods"):
-            for m in MODS:
-                with Horizontal(classes="mod"):
-                    yield Switch(id=f"mod-{m.key}")
-                    with Vertical(classes="mod-text"):
-                        yield Static(tagged(m.title, m.tags))
-                        yield Static(Text(m.desc, style=MUTED))
-                    for pk, plabel, default in m.params:
-                        yield Label(plabel, classes="plabel")
-                        yield Input(default, id=f"param-{pk}", classes="param", type="number", valid_empty=True)
+        for m in MODS:
             with Horizontal(classes="mod"):
+                yield Switch(id=f"mod-{m.key}")
                 with Vertical(classes="mod-text"):
-                    yield Static(tagged("Gravity", ["world", "chaos"]))
-                    yield Static(Text("Changes gravity for the whole world. Reverse makes everything fall up.",
-                                      style=MUTED))
-                yield Select(GRAVITY, value="normal", allow_blank=False, id="gravity")
-                yield Label("custom", classes="plabel")
-                yield Input("-980", id="param-gravity_custom", classes="param", type="number", valid_empty=True)
-            yield Static("Numbers apply when you press Enter in their box.", classes="hint")
-            with Horizontal(classes="row"):
-                yield self.btn("🚀 Launch everyone", "launch-all",
-                               lambda: self.confirm("Launch everyone", lambda: self.send("launch", "all", 2200)))
-                yield self.btn("🛑 Panic reset (F8)", "panic", self.action_panic, "error")
+                    yield Static(tagged(m.title, m.tags))
+                    yield Static(Text(m.desc, style=MUTED))
+                for pk, plabel, default in m.params:
+                    yield Label(plabel, classes="plabel")
+                    yield Input(default, id=f"param-{pk}", classes="param", type="number", valid_empty=True,
+                                compact=True)
+        with Horizontal(classes="mod"):
+            with Vertical(classes="mod-text"):
+                yield Static(tagged("Gravity", ["world", "chaos"]))
+                yield Static(Text("Changes gravity for the whole world. Reverse makes everything fall up.", style=MUTED))
+            yield Select(GRAVITY, value="normal", allow_blank=False, id="gravity", compact=True)
+            yield Label("custom", classes="plabel")
+            yield Input("-980", id="param-gravity_custom", classes="param", type="number", valid_empty=True, compact=True)
+        yield Static("Numbers apply when you press Enter in their box.", classes="hint")
+        with Horizontal(classes="bar"):
+            yield self.btn("Launch everyone", "launch-all",
+                           lambda: self.confirm("Launch everyone", lambda: self.send("launch", "all", 2200)))
+            yield self.btn("Panic reset  F8", "panic", self.action_panic, "error")
 
     def compose_backups(self) -> ComposeResult:
         yield Static("", id="backup-head")
-        yield DataTable(id="backups", cursor_type="row", zebra_stripes=True)
-        with Horizontal(classes="row"):
+        yield DataTable(id="backup-table", cursor_type="row", zebra_stripes=True)
+        with Horizontal(classes="bar"):
             yield self.btn("Back up saves now", "bk-now", self.action_backup, "primary")
             yield self.btn("Restore selected", "bk-restore", self.restore_selected, "warning")
             yield self.btn("Delete selected", "bk-delete", self.delete_selected, "error")
-            yield self.btn("Open backups folder", "bk-open", self.open_backups)
-        yield Static("Restoring always makes a safety backup of the current saves first. "
-                     "Game-file backups hold anything the DLL install replaced.", classes="hint")
+            yield self.btn("Open folder", "bk-open", self.open_backups)
 
     def compose_setup(self) -> ComposeResult:
-        with VerticalScroll():
-            yield Static("", id="setup-status")
-            with Horizontal(classes="row"):
-                yield self.btn("Copy DLL to game files (with backup)", "s-inject", self.inject, "primary")
-                yield self.btn("Remove DLL (restore originals)", "s-remove", self.remove, "warning")
-                yield self.btn("Re-detect game", "s-detect", self.detect)
-            with Horizontal(classes="row"):
-                yield self.btn("Dump game data for Claude", "s-dump", self.action_dump)
-                yield self.btn("Rescan spawnable items", "s-rescan", lambda: self.send("scan_classes"))
-                yield self.btn("Copy launch option (alternative)", "s-launch", self.copy_launch)
-            with Horizontal(classes="row"):
-                yield Input(placeholder="game folder, if not found automatically", id="game-path")
-                yield self.btn("Use this folder", "s-path", self.use_path)
-            yield Static(self.setup_help(), classes="hint")
+        yield Static("", id="setup-status", classes="card")
+        with Horizontal(classes="bar"):
+            yield self.btn("Copy DLL to game files (with backup)", "s-inject", self.inject, "primary")
+            yield self.btn("Remove DLL (restore originals)", "s-remove", self.remove, "warning")
+            yield self.btn("Re-detect game", "s-detect", self.detect)
+        with Horizontal(classes="bar"):
+            yield self.btn("Dump game data for Claude", "s-dump", self.action_dump)
+            yield self.btn("Rescan spawnable items", "s-rescan", lambda: self.send("scan_classes"))
+            yield self.btn("Copy launch option (alternative)", "s-launch", self.copy_launch)
+        with Horizontal(classes="bar"):
+            yield Input(placeholder="game folder, if not found automatically", id="game-path", compact=True)
+            yield self.btn("Use this folder", "s-path", self.use_path)
+        yield Static(self.setup_help(), classes="hint")
 
     # ------------------------------------------------------------------ lifecycle
     def on_mount(self) -> None:
         self.register_theme(THEME)
-        self.theme = "ui-vault"
-        self.query_one("#stats", DataTable).add_columns("Stat", "Value", "Tag")
-        for key in ("armor", "weapons"):
-            self.query_one(f"#gear-{key}", DataTable).add_columns("Piece", "Asset", "Kind", "Scale")
-        self.query_one("#coins", DataTable).add_columns("Where", "Name", "Value")
-        self.query_one("#backups", DataTable).add_columns("When", "Age", "Kind", "Reason", "Size", "Name")
+        self.theme = "hsl-dashboard"
+        if not self.saves_only:
+            self.query_one("#stats", DataTable).add_columns("Stat", "Value", "Tag")
+            for key in ("armor", "weapons"):
+                self.query_one(f"#gear-{key}", DataTable).add_columns("Piece", "Asset", "Kind", "Scale")
+            self.query_one("#coins", DataTable).add_columns("Where", "Name", "Value")
+        self.query_one("#backup-table", DataTable).add_columns("When", "Age", "Kind", "Reason", "Size", "Name")
+        self.query_one("#home-backups", DataTable).add_columns("When", "Kind", "Reason", "Size")
         self.detect()
+        self.go("home")
         self.set_interval(1.0, self.poll)
+
+    def go(self, page: str) -> None:
+        self.query_one("#pages", ContentSwitcher).current = page
+        meta = next(p for p in self.pages if p[0] == page)
+        t = Text(meta[2], style="bold")
+        t.append(f"\n{meta[3]}", style=MUTED)
+        self.query_one("#page-title", Static).update(t)
+        nav = self.query_one("#nav", OptionList)
+        idx = nav.get_option_index(page)
+        if nav.highlighted != idx:
+            nav.highlighted = idx
+        if page == "saves":
+            self.query_one(SaveEditor).reload()
+
+    def action_go_index(self, i: int) -> None:
+        if i < len(self.pages):
+            self.go(self.pages[i][0])
 
     def detect(self) -> None:
         if self.demo:
-            self.bridge = DemoBridge()
+            self.bridge = None if self.saves_only else DemoBridge()
+            if not any(DEMO_SAVES.glob("*.sav")):
+                make_demo_save(DEMO_SAVES / "SaveSlot_0.sav", new_tags=True)
+                make_demo_save(DEMO_SAVES / "Autosave_0.sav", new_tags=False)
             if not g.list_backups(self.backups_dir):
                 self.make_backup("demo")
         else:
             games = g.find_games()
             self.game = games[0] if games else None
             bd = self.game.bridge_dir if self.game else None
-            self.bridge = Bridge(bd) if bd and bd.parent.exists() else None
-        self.load_mods()
-        self.render_setup()
+            self.bridge = Bridge(bd) if bd and bd.parent.exists() and not self.saves_only else None
+        if not self.saves_only:
+            self.load_mods()
+            self.render_setup()
         self.sigs.pop("backups", None)
         self.poll()
+
+    def save_dirs(self) -> list[Path]:
+        if self.custom_save_dir:
+            return [self.custom_save_dir]
+        if self.demo:
+            return [DEMO_SAVES]
+        return self.game.save_dirs() if self.game else []
 
     def load_mods(self) -> None:
         if not self.bridge:
@@ -371,18 +375,7 @@ class LabApp(App):
         self.push_screen(BackupPrompt(change), done)
 
     def make_backup(self, reason: str) -> Path | None:
-        if self.demo:
-            self.backups_dir.mkdir(parents=True, exist_ok=True)
-            out = self.backups_dir / f"saves-{time.strftime('%Y%m%d-%H%M%S')}-{reason}.tar.gz"
-            data = json.dumps((self.state or {}).get("economy", [])).encode()
-            with tarfile.open(out, "w:gz") as tar:
-                info = tarfile.TarInfo("demo/state.json")
-                info.size = len(data)
-                tar.addfile(info, io.BytesIO(data))
-            out.with_name(out.name[:-7] + ".json").write_text(json.dumps(
-                {"kind": "saves", "reason": reason, "format": "tar", "created": time.strftime("%Y-%m-%dT%H:%M:%S")}))
-        else:
-            out = g.backup_saves(self.game, reason)
+        out = g.backup_dirs(self.save_dirs(), reason, self.game, self.backups_dir)
         self.note(f"Backup made: {out.name}" if out else "No save folder found to back up (has the game been played yet?)")
         self.sigs.pop("backups", None)
         self.refresh_backups()
@@ -391,23 +384,72 @@ class LabApp(App):
     # ------------------------------------------------------------------ polling
     def poll(self) -> None:
         self.refresh_backups()
-        if not self.bridge:
-            self.sub_title = "Lab DLL not in the game yet · open the Setup tab"
-            return
-        self.state, self.live = self.bridge.read_state()
-        if self.demo:
-            self.sub_title = "DEMO MODE · fake data"
-        elif self.live:
-            w = (self.state or {}).get("world", {})
-            self.sub_title = f"● LIVE · {w.get('map') or 'in game'}" + (" · mods paused (panic)" if w.get("paused") else "")
-        else:
-            self.sub_title = "○ waiting for the game (start Half Sword)"
+        if self.bridge:
+            self.state, self.live = self.bridge.read_state()
         if self.live and not self.demo and not self.backed_up:
             self.backed_up = True
             self.backup_thread("session")
-        self.refresh_chars()
-        self.refresh_detail()
-        self.refresh_logs()
+        self.refresh_status()
+        self.refresh_home()
+        if not self.saves_only:
+            self.refresh_chars()
+            self.refresh_detail()
+            self.refresh_logs()
+
+    def refresh_status(self) -> None:
+        if self.demo:
+            t = Text("● DEMO", style=f"bold {CYAN}")
+            t.append("\n  fake data", style=DIM)
+        elif self.saves_only:
+            running = self.game.running() if self.game else False
+            t = Text("● game running" if running else "○ game closed", style="#facc15" if running else MUTED)
+            t.append("\n  quit it before writing" if running else "\n  safe to edit saves", style=DIM)
+        elif not self.bridge:
+            t = Text("○ DLL not installed", style=MUTED)
+            t.append("\n  see Setup", style=DIM)
+        elif self.live:
+            t = Text("● LIVE", style="bold #34d399")
+            t.append(f"\n  {(self.state or {}).get('world', {}).get('map') or 'in game'}", style=DIM)
+        else:
+            t = Text("○ game not running", style=MUTED)
+        t.append(f"\n\n  v{VERSION}", style=DIM)
+        self.query_one("#side-status", Static).update(t)
+
+    def refresh_home(self) -> None:
+        saves = [f for d in self.save_dirs() for f in d.glob("*.sav")]
+        newest = max((f.stat().st_mtime for f in saves), default=0)
+        self.query_one("#stat-saves", Static).update(
+            Text.assemble((f"{len(saves)} save file(s)", f"bold {CYAN}"), (f"  · newest {human_age(newest)}" if saves else
+                                                                           "  · none found yet", MUTED)))
+        backups = g.list_backups(self.backups_dir)
+        self.query_one("#stat-backups", Static).update(
+            Text.assemble((f"{len(backups)} backup(s)", f"bold {CYAN}"),
+                          (f"  · newest {human_age(backups[0].created)}" if backups else "", MUTED)))
+        if not self.saves_only:
+            if self.demo or self.live:
+                live = Text("● live", style="bold #34d399")
+                live.append(f"  · {len(self.chars())} characters", style=MUTED)
+            elif self.bridge:
+                live = Text("○ start Half Sword", style=MUTED)
+            else:
+                live = Text("DLL not installed yet", style="#facc15")
+            self.query_one("#stat-live", Static).update(live)
+            if self.demo:
+                setup = Text("demo: nothing to install", style=MUTED)
+            elif self.game:
+                setup = Text("✔ DLL installed" if self.game.injected else "DLL not installed",
+                             style="bold #34d399" if self.game.injected else "#facc15")
+            else:
+                setup = Text("Half Sword not found", style="#f43f5e")
+            self.query_one("#stat-setup", Static).update(setup)
+        table = self.query_one("#home-backups", DataTable)
+        if self.changed("home-backups", [str(b.path) for b in backups[:5]]):
+            table.clear()
+            for b in backups[:5]:
+                table.add_row(Text(time.strftime("%b %d %H:%M", time.localtime(b.created))), tag(b.kind), tag(b.reason),
+                              Text(human_size(b.size), style=DIM))
+            if not backups:
+                table.add_row(Text("No backups yet", style=MUTED), "", "", "")
 
     def chars(self) -> list[dict]:
         if not (self.state and (self.live or self.demo)):
@@ -448,9 +490,12 @@ class LabApp(App):
             ("gravity ", DIM), (str(world.get("gravity", "?")), MUTED), ("   chars ", DIM), (str(len(chars)), MUTED)))
 
     def on_option_list_option_highlighted(self, e: OptionList.OptionHighlighted) -> None:
-        if e.option_id and e.option_id != self.selected:
+        if e.option_list.id == "nav" and e.option_id:
+            if self.query_one("#pages", ContentSwitcher).current != e.option_id:
+                self.go(e.option_id)
+        elif e.option_list.id == "chars" and e.option_id and e.option_id != self.selected:
             self.selected = e.option_id
-            self.sigs = {k: v for k, v in self.sigs.items() if k in ("chars", "backups")}
+            self.sigs = {k: v for k, v in self.sigs.items() if k in ("chars", "backups", "home-backups")}
             self.refresh_detail()
 
     def refresh_detail(self) -> None:
@@ -529,7 +574,7 @@ class LabApp(App):
         backups = g.list_backups(self.backups_dir)
         if not self.changed("backups", [(str(b.path), int(b.created // 60)) for b in backups]):
             return
-        table = self.query_one("#backups", DataTable)
+        table = self.query_one("#backup-table", DataTable)
         row = table.cursor_row
         table.clear()
         for b in backups:
@@ -540,9 +585,8 @@ class LabApp(App):
             self.sel_backup = str(backups[min(max(row, 0), len(backups) - 1)].path)
         else:
             self.sel_backup = None
-        head = Text.assemble((f"{len(backups)} backups", "bold"), ("  ·  newest first  ·  ", MUTED),
-                             (str(self.backups_dir), DIM))
-        self.query_one("#backup-head", Static).update(head)
+        self.query_one("#backup-head", Static).update(
+            Text.assemble((f"{len(backups)} backups", "bold"), ("  ·  newest first  ·  ", MUTED), (str(self.backups_dir), DIM)))
 
     def refresh_logs(self) -> None:
         out = self.query_one("#log", RichLog)
@@ -555,10 +599,10 @@ class LabApp(App):
         self.query_one("#log", RichLog).write(Text.assemble(("lab   ", VIOLET), msg))
         self.notify(msg, severity=severity)
 
-    # ------------------------------------------------------------------ actions
+    # ------------------------------------------------------------------ live actions
     def ready(self) -> bool:
         if not self.bridge:
-            self.note("The Lab DLL isn't in the game yet. See the Setup tab.", "warning")
+            self.note("The Lab DLL isn't in the game yet. See the Setup page.", "warning")
             return False
         if not (self.live or self.demo):
             self.note("Half Sword isn't running (or the DLL didn't load). Start the game first.", "warning")
@@ -569,7 +613,7 @@ class LabApp(App):
         if not self.ready():
             return
         self.bridge.send(verb, *args)
-        self.sigs = {k: v for k, v in self.sigs.items() if k == "backups"}
+        self.sigs = {k: v for k, v in self.sigs.items() if k in ("backups", "home-backups")}
 
     def char_cmd(self, label: str, verb: str, *args) -> None:
         c = self.current()
@@ -607,8 +651,7 @@ class LabApp(App):
     def spawn(self, key: str) -> None:
         path = self.query_one(f"#spawn-{key}", Select).value
         if not isinstance(path, str):
-            self.note("Pick something to spawn first (Rescan spawnable items in Setup if the list is empty).",
-                      "warning")
+            self.note("Pick something to spawn first (Rescan spawnable items in Setup if the list is empty).", "warning")
             return
         try:
             n = max(1, min(12, int(self.query_one(f"#count-{key}", Input).value or 1)))
@@ -622,7 +665,7 @@ class LabApp(App):
         table = self.query_one("#coins", DataTable)
         eco = (self.state or {}).get("economy", [])
         if not eco or table.cursor_row < 0:
-            self.note("No coin values found yet. Try a dump (D) and hand it to Claude.", "warning")
+            self.note("No coin values found yet. Try the Save Editor, or a dump (D) for Claude.", "warning")
             return None
         return eco[min(table.cursor_row, len(eco) - 1)]
 
@@ -663,7 +706,7 @@ class LabApp(App):
             return
         if tid.startswith("gear-"):
             self.sel_gear[tid[5:]] = e.row_key.value
-        elif tid == "backups":
+        elif tid == "backup-table":
             self.sel_backup = e.row_key.value
 
     def on_data_table_row_selected(self, e: DataTable.RowSelected) -> None:
@@ -688,8 +731,7 @@ class LabApp(App):
             old = self.cfg.get(key, "")
             if value == old:
                 return
-            self.confirm(f"{key} = {value}", lambda: self.set_cfg({key: value}),
-                         lambda: self.set_quiet(f"#{iid}", old))
+            self.confirm(f"{key} = {value}", lambda: self.set_cfg({key: value}), lambda: self.set_quiet(f"#{iid}", old))
         elif iid.startswith("in-"):
             self.apply_input(iid[3:])
 
@@ -734,12 +776,12 @@ class LabApp(App):
         self.note("Applied: " + ", ".join(f"{k}={v}" for k, v in changes.items()))
 
     def action_panic(self) -> None:
-        if self.ready():
+        if not self.saves_only and self.ready():
             self.confirm("Panic reset (undo everything the Lab changed)", lambda: self.send("panic"))
 
     def action_dump(self) -> None:
-        if self.demo:
-            self.note("Dump needs the real game.", "warning")
+        if self.demo or self.saves_only:
+            self.note("Dump needs the real game with the Lab DLL.", "warning")
             return
         if self.ready():
             self.send("dump")
@@ -763,7 +805,7 @@ class LabApp(App):
     def backup_thread(self, reason: str) -> None:
         self.call_from_thread(self.make_backup, reason)
 
-    # ------------------------------------------------------------------ backups tab
+    # ------------------------------------------------------------------ backups page
     def selected_backup(self) -> g.Backup | None:
         b = next((x for x in g.list_backups(self.backups_dir) if str(x.path) == self.sel_backup), None)
         if not b:
@@ -776,14 +818,12 @@ class LabApp(App):
             return
 
         def apply() -> None:
-            if self.demo:
-                self.note(f"Demo: would restore {b.path.name}")
-                return
             try:
                 self.note(g.restore_backup(b, self.game))
             except (OSError, tarfile.TarError, KeyError) as ex:
                 self.note(f"Restore failed: {ex}", "error")
             self.sigs.pop("backups", None)
+            self.query_one(SaveEditor).reload()
 
         self.confirm(f"Restore {b.kind} backup from {time.strftime('%Y-%m-%d %H:%M', time.localtime(b.created))}", apply)
 
@@ -803,21 +843,18 @@ class LabApp(App):
 
     def open_backups(self) -> None:
         self.backups_dir.mkdir(parents=True, exist_ok=True)
-        opener = "xdg-open" if shutil.which("xdg-open") else None
-        if opener:
-            subprocess.Popen([opener, str(self.backups_dir)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if shutil.which("xdg-open"):
+            subprocess.Popen(["xdg-open", str(self.backups_dir)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.note(f"Backups folder: {self.backups_dir}")
 
-    # ------------------------------------------------------------------ setup tab
+    # ------------------------------------------------------------------ setup page
     def setup_help(self) -> Text:
         return Text(
-            "How it works: \"Copy DLL\" puts the Lab's own version.dll next to the game's exe (nothing else is "
-            "installed). Half Sword loads it on start. It finds the game's characters and stats by name through "
-            "Unreal's reflection, draws the in-game menu (press \\), and talks to this window through files in "
-            "HalfSwordLab/bridge.\n"
-            "On Linux the DLL is switched on inside the game's own Proton prefix, so no launch options are "
-            "needed. Anything it replaces is backed up first, and Remove puts it all back.\n"
-            f"Saves are also backed up the first time the game connects each session ({g.BACKUPS}).", style=MUTED)
+            "\"Copy DLL\" puts the Lab's own version.dll next to the game's exe (nothing else is installed). Half "
+            "Sword loads it on start; it finds characters and stats by name through Unreal's reflection, draws the "
+            "in-game menu (press \\), and talks to this window through files in HalfSwordLab/bridge.\n"
+            "On Linux the DLL is switched on inside the game's own Proton prefix, so no launch options are needed. "
+            "Anything it replaces is backed up first, and Remove puts it all back.", style=MUTED)
 
     def render_setup(self) -> None:
         def row(ok, label, detail=""):
@@ -841,8 +878,6 @@ class LabApp(App):
                                   "start the game once so Proton creates its prefix" if ov is None else "no"))
             saves = gm.save_dirs()
             t.append_text(row(bool(saves), "Saves", ", ".join(str(s) for s in saves) or "none found yet"))
-        backups = g.list_backups(self.backups_dir)
-        t.append_text(row(bool(backups), "Backups", f"{len(backups)} in {self.backups_dir}"))
         self.query_one("#setup-status", Static).update(t)
 
     def inject(self) -> None:

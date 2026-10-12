@@ -202,22 +202,28 @@ static int g_spawnPick[2] = {0, 0};
 static void bodyRow(const char* label, const char* verb, float& value, float lo, float hi,
                     std::vector<std::pair<const char*, float>> presets, const CharView& c) {
     ImGui::PushID(verb);
-    ImGui::TextColored(CYAN, "%-7s", label);
-    ImGui::SameLine(80);
-    ImGui::SetNextItemWidth(200);
+    float indent = 80 * ImGui::GetStyle().FontScaleMain;
+    ImGui::TextColored(CYAN, "%s", label);
+    ImGui::SameLine(indent);
+    ImGui::SetNextItemWidth(220 * ImGui::GetStyle().FontScaleMain);
     ImGui::SliderFloat("##v", &value, lo, hi, "%.2fx");
     ImGui::SameLine();
     char buf[32];
     snprintf(buf, sizeof buf, "%.2f", value);
     if (ImGui::Button("Apply")) cmd(std::string(label) + " " + buf + "x on " + c.name, verb, {c.id, buf});
+    // Presets on their own line so they never get cut off.
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+    bool first = true;
     for (auto& [n, v] : presets) {
-        ImGui::SameLine();
-        if (ImGui::Button(n)) {
+        if (!first) ImGui::SameLine();
+        first = false;
+        if (ImGui::SmallButton(n)) {
             snprintf(buf, sizeof buf, "%.2f", v);
             value = v;
             cmd(std::string(label) + " " + n + " on " + c.name, verb, {c.id, buf});
         }
     }
+    ImGui::Dummy(ImVec2(0, 4));
     ImGui::PopID();
 }
 
@@ -357,7 +363,7 @@ static void drawCharacter(const CharView& c, const Snapshot& s) {
 
 static void drawCharacters(const Snapshot& s) {
     static std::string sliderFor;
-    ImGui::BeginChild("list", ImVec2(250, 0), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("list", ImVec2(200 * ImGui::GetStyle().FontScaleMain, 0), ImGuiChildFlags_Borders);
     const CharView* sel = nullptr;
     for (auto& c : s.chars)
         if (c.id == g_selected) sel = &c;
@@ -496,39 +502,147 @@ static void drawMods() {
     ImGui::PopStyleColor();
 }
 
+// ------------------------------------------------------------------ dashboard shell (sidebar + pages)
+
+enum Page { P_HOME, P_CHARS, P_COINS, P_MODS, P_BACKUPS, P_LOG, P_COUNT };
+static int g_page = P_HOME;
+static const char* PAGE_NAMES[P_COUNT] = {"Home", "Characters", "Coins", "Mods", "Backups", "Log"};
+static const char* PAGE_SUBS[P_COUNT] = {
+    "Pick what you want to do.", "Everyone in the fight. Pick one to change them.", "Gold and other currencies.",
+    "World mods, applied live.", "Every change asks first. Restore lives in the terminal app.", "What the Lab did."};
+
+static void pageTitle(const char* title, const char* sub) {
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.45f);
+    ImGui::TextUnformatted(title);
+    ImGui::PopFont();
+    ImGui::TextColored(MUTED, "%s", sub);
+    ImGui::Dummy(ImVec2(0, 6));
+}
+
+// A bordered card with a title, a line of detail, one highlighted stat and an action button.
+static bool card(const char* id, const char* title, const char* desc, const std::string& stat, ImVec4 statColor,
+                 const char* action, float w, float h) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, rgb(15, 15, 24));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10);
+    ImGui::BeginChild(id, ImVec2(w, h), ImGuiChildFlags_Borders);
+    ImGui::Dummy(ImVec2(0, 2));
+    ImGui::TextUnformatted(title);
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextColored(MUTED, "%s", desc);
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::TextColored(statColor, "%s", stat.c_str());
+    ImGui::SetCursorPosY(h - ImGui::GetFrameHeight() - ImGui::GetStyle().WindowPadding.y - 2);
+    bool clicked = ImGui::Button(action);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    return clicked;
+}
+
+static void drawHome(const Snapshot& s) {
+    int players = 0, mercs = 0, opps = 0;
+    for (auto& c : s.chars) (c.role == "player" ? players : c.role == "mercenary" ? mercs : opps)++;
+    auto cfg = mods();
+    int active = 0;
+    for (auto& m : MODS) active += cfg.count(m.key) && cfg[m.key] == "1";
+    std::string gravity = cfg.count("gravity") ? cfg["gravity"] : "normal";
+    std::string coin = s.economy.empty() ? "not found yet" : s.economy[0].n + ": " + std::to_string((long long)s.economy[0].v);
+
+    float gap = ImGui::GetStyle().ItemSpacing.x;
+    float w = (ImGui::GetContentRegionAvail().x - gap) / 2, h = 150 * ImGui::GetStyle().FontScaleMain;
+    char buf[128];
+    snprintf(buf, sizeof buf, "%d characters  (%d merc, %d opp)", (int)s.chars.size(), mercs, opps);
+    if (card("c-chars", "Characters", "Size, weight, speed, stats, armor and weapons for anyone in the fight.",
+             buf, CYAN, "Open characters  >", w, h)) g_page = P_CHARS;
+    ImGui::SameLine();
+    snprintf(buf, sizeof buf, "%d mods on  ·  gravity %s", active, gravity.c_str());
+    if (card("c-mods", "Mods", "Random opponent sizes, Matrix mode, moon gravity, giant weapons and more.",
+             buf, active ? VIOLET : MUTED, "Open mods  >", w, h)) g_page = P_MODS;
+    if (card("c-coins", "Coins", "Set your gold. Save in-game afterwards to keep it.", coin,
+             rgb(245, 197, 66), "Open coins  >", w, h)) g_page = P_COINS;
+    ImGui::SameLine();
+    if (card("c-backups", "Backups", "Back up your saves before trying something wild.",
+             g_lastBackup.empty() ? std::string("no backup this session") : g_lastBackup, MUTED, "Back up saves now", w, h))
+        g_lastBackup = backupSaves("in-game");
+
+    ImGui::Dummy(ImVec2(0, 8));
+    ImGui::TextColored(MUTED, "QUICK ACTIONS");
+    if (ImGui::Button("Launch everyone")) cmd("Launch everyone", "launch", {"all", "2200"});
+    ImGui::SameLine();
+    if (ImGui::Button("Normal gravity")) confirm("Gravity: Normal", [] { setMod("gravity", "normal"); });
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, rgb(244, 63, 94, 0.55f));
+    if (ImGui::Button("Panic reset (F8)")) enqueue({"panic", {}});
+    ImGui::PopStyleColor();
+}
+
+static void drawSidebar(const Snapshot& s) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, rgb(12, 12, 20));
+    ImGui::BeginChild("side", ImVec2(200 * ImGui::GetStyle().FontScaleMain, 0), ImGuiChildFlags_None);
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Indent(8);
+    ImGui::TextColored(VIOLET, "HALF SWORD LAB");
+    ImGui::TextColored(DIM, "trainer + mod lab");
+    ImGui::Unindent(8);
+    ImGui::Dummy(ImVec2(0, 10));
+    for (int i = 0; i < P_COUNT; i++) {
+        bool sel = g_page == i;
+        if (sel) ImGui::PushStyleColor(ImGuiCol_Header, rgb(139, 92, 246, 0.35f));
+        char label[48];
+        snprintf(label, sizeof label, "  %s", PAGE_NAMES[i]);
+        if (ImGui::Selectable(label, sel, 0, ImVec2(0, ImGui::GetFrameHeight()))) g_page = i;
+        if (sel) ImGui::PopStyleColor();
+    }
+    float bottom = ImGui::GetWindowHeight() - ImGui::GetTextLineHeightWithSpacing() * 4;
+    if (ImGui::GetCursorPosY() < bottom) ImGui::SetCursorPosY(bottom);
+    ImGui::Indent(8);
+    if (s.ready) ImGui::TextColored(rgb(52, 211, 153), "* LIVE  %s", s.map.c_str());
+    else ImGui::TextColored(rgb(250, 204, 21), "%s", s.status.c_str());
+    if (s.paused) ImGui::TextColored(rgb(250, 204, 21), "mods paused (panic)");
+    ImGui::TextColored(DIM, "\\ closes   F8 panic");
+    ImGui::Unindent(8);
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
 static void drawMenu() {
     Snapshot s = snapshot();
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowSize(ImVec2(900, 600), ImGuiCond_FirstUseEver);
+    float sc = ImGui::GetStyle().FontScaleMain;
+    ImGui::SetNextWindowSize(ImVec2(1000 * sc, 640 * sc), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-    bool open = true;
-    if (ImGui::Begin("HALF SWORD LAB", &open, ImGuiWindowFlags_NoCollapse)) {
-        if (s.ready) ImGui::TextColored(rgb(52, 211, 153), "LIVE");
-        else ImGui::TextColored(rgb(250, 204, 21), "%s", s.status.c_str());
-        ImGui::SameLine();
-        ImGui::TextColored(MUTED, "%s   %d characters   \\ closes   F8 panic reset%s", s.map.c_str(), (int)s.chars.size(),
-                           s.paused ? "   (mods paused)" : "");
-        if (ImGui::BeginTabBar("main")) {
-            if (ImGui::BeginTabItem("Characters")) { drawCharacters(s); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Coins")) { drawCoins(s); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Mods")) { drawMods(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Backups")) {
-                if (ImGui::Button("Back up saves now", ImVec2(200, 32))) g_lastBackup = backupSaves("in-game");
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    bool open = ImGui::Begin("##hsl", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                                                    ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
+    if (open) {
+        drawSidebar(s);
+        ImGui::SameLine(0, 0);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22 * sc, 18 * sc));
+        ImGui::BeginChild("page", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
+        pageTitle(g_page == P_HOME ? "Welcome back" : PAGE_NAMES[g_page], PAGE_SUBS[g_page]);
+        switch (g_page) {
+            case P_HOME: drawHome(s); break;
+            case P_CHARS: drawCharacters(s); break;
+            case P_COINS: drawCoins(s); break;
+            case P_MODS: drawMods(); break;
+            case P_BACKUPS:
+                if (ImGui::Button("Back up saves now")) g_lastBackup = backupSaves("in-game");
                 if (!g_lastBackup.empty()) ImGui::TextColored(MUTED, "%s", g_lastBackup.c_str());
-                ImGui::TextColored(DIM, "Every change asks first. All backups (newest first) and restore\n"
-                                        "are in the Backups tab of the terminal app (run.sh).");
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Log")) {
+                ImGui::Dummy(ImVec2(0, 6));
+                ImGui::TextColored(DIM, "The full list (newest first), restore and delete are on the Backups page\n"
+                                        "of the terminal app (run.sh). The Save Editor there edits saves offline.");
+                break;
+            case P_LOG:
                 for (auto it = s.log.rbegin(); it != s.log.rend(); ++it) ImGui::TextColored(MUTED, "%s", it->c_str());
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
+                break;
         }
         drawConfirm();
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
     }
     ImGui::End();
-    if (!open) g_visible = false;
 }
 
 static void drawToast() {
@@ -561,7 +675,7 @@ static void applyStyle(float scale) {
     c[ImGuiCol_WindowBg] = rgb(8, 8, 13, 0.95f);
     c[ImGuiCol_ChildBg] = rgb(18, 18, 27, 0.9f);
     c[ImGuiCol_PopupBg] = rgb(14, 14, 22, 0.98f);
-    c[ImGuiCol_Border] = rgb(139, 92, 246, 0.35f);
+    c[ImGuiCol_Border] = rgb(42, 42, 64);
     c[ImGuiCol_FrameBg] = rgb(24, 24, 36);
     c[ImGuiCol_FrameBgHovered] = rgb(139, 92, 246, 0.25f);
     c[ImGuiCol_FrameBgActive] = rgb(139, 92, 246, 0.4f);

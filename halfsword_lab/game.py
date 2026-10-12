@@ -273,17 +273,24 @@ def _write_manifest(archive: Path, **info) -> None:
     archive.with_name(archive.name.split(".tar.gz")[0] + ".json").write_text(json.dumps(info, indent=2))
 
 
-def backup_saves(game: GameInstall | None, reason: str = "manual") -> Path | None:
-    dirs = game.save_dirs() if game else []
+def backup_dirs(dirs: list[Path], reason: str, game: GameInstall | None = None, folder: Path | None = None) -> Path | None:
+    """Back up save folders (…/<Project>/Saved/SaveGames). The AppData root is recorded for restoring."""
+    dirs = [d for d in dirs if d.is_dir()]
     if not dirs:
         return None
-    BACKUPS.mkdir(parents=True, exist_ok=True)
-    out = BACKUPS / f"saves-{_now()}-{reason}.tar.gz"
+    folder = folder or BACKUPS
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / f"saves-{_now()}-{reason}.tar.gz"
     with tarfile.open(out, "w:gz") as tar:
         for d in dirs:
             tar.add(d, arcname=str(d.relative_to(d.parents[2])))
-    _write_manifest(out, kind="saves", reason=reason, format="tar", game=str(game.root))
+    _write_manifest(out, kind="saves", reason=reason, format="tar", root=str(dirs[0].parents[2]),
+                    game=str(game.root) if game else "")
     return out
+
+
+def backup_saves(game: GameInstall | None, reason: str = "manual") -> Path | None:
+    return backup_dirs(game.save_dirs() if game else [], reason, game)
 
 
 def backup_files(files: list[Path], reason: str, game: GameInstall | None) -> Path | None:
@@ -351,12 +358,13 @@ def list_backups(folder: Path | None = None) -> list[Backup]:
 
 def restore_backup(b: Backup, game: GameInstall | None) -> str:
     if b.kind == "saves":
-        dest = game.local_appdata if game else None
+        dest = Path(b.info["root"]) if b.info.get("root") else (game.local_appdata if game else None)
         if not dest:
             return "Can't restore saves: the game's AppData folder wasn't found."
         if game and game.running():
             return "Quit Half Sword before restoring saves."
-        backup_saves(game, "pre-restore")
+        current = [p for p in dest.glob("*/Saved/SaveGames") if p.is_dir()]
+        backup_dirs(current, "pre-restore", game, b.path.parent)
         if b.fmt == "tar":
             with tarfile.open(b.path) as tar:
                 tar.extractall(dest, filter="data")

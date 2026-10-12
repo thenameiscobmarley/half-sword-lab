@@ -25,6 +25,11 @@ build, run under Wine (`python3 native/test/run_fake.py /tmp/hsl --menu [--d3d12
 - the "Make Backup Before Applying Changes?" popup and in-game backups
 - install / remove through the Proton prefix (`user.reg` AppDefaults override)
 
+Also built: a **Save Editor** (`halfsword_lab/save.py` + `saveui.py`, `./save-editor.sh` for the save-only
+edition). It parses GVAS (classic + UE5.4 tags) and patches numbers/bools in place. It was checked against a
+real Deep Rock Galactic save (UE4.27, 0 parse warnings, edit = only the edited bytes change) and against
+uesave-rs reading the demo saves it writes.
+
 **Not verified, because nobody could see the real game:**
 
 | Area | Current approach (`native/src/lab.cpp`) | Verify / fix |
@@ -37,6 +42,7 @@ build, run under Wine (`python3 native/test/run_fake.py /tmp/hsl --menu [--d3d12
 | Weapons / armor | BP classes with weapon/armor words; actors whose attach parent/Owner is a character; mesh components on the character | how Half Sword really attaches gear |
 | Spawning / clones | `BeginDeferredActorSpawnFromClass` + `FinishSpawningActor` | do spawned NPCs get an AI controller and fight? |
 | Weight | `Mesh:SetAllMassScale` | the active ragdoll still behaves |
+| Save Editor | generic GVAS parse | open a **copy** of a real Half Sword save first: the header must show no "parts left as-is"; find gold / mercenary values; edit the copy, load it in-game |
 | Overlay | Present/Present1/ResizeBuffers + ExecuteCommandLists hooks, input via raw mouse deltas | mouse in the menu while Half Sword has the cursor captured |
 
 ## ⚠ The user's current game state
@@ -77,6 +83,7 @@ build, run under Wine (`python3 native/test/run_fake.py /tmp/hsl --menu [--d3d12
    - [ ] every mod in the Mods tab, gravity presets, Matrix Mode
    - [ ] in-game `\` menu: mouse works, backup popup works, F8 panic
    - [ ] Remove DLL restores everything
+   - [ ] Save Editor: real saves parse, gold/mercenary edits stick after loading the save in-game
 6. **Add Half-Sword-specific mods** once the real names are known. Ideas: free mercenary hiring, spawn a
    chosen enemy type, an "arena of clones" wave mode, bleeding immunity, a gear randomiser. Add each in
    `halfsword_lab/mods.py` **and** `native/src/overlay.cpp MODS`, with tags.
@@ -87,11 +94,13 @@ build, run under Wine (`python3 native/test/run_fake.py /tmp/hsl --menu [--d3d12
 
 ```
 run.sh / run.bat                 launchers (list what's missing, ask y/n, then python -m halfsword_lab)
-halfsword_lab/app.py             Textual GUI: Characters[Body/Stats/Armor/Weapons/Coins/Goofy], Mods, Backups, Setup, Log
+halfsword_lab/app.py             Textual dashboard: sidebar + Home landing page, Save Editor, Live Lab, Mods, Backups, Setup, Log
 halfsword_lab/game.py            Steam/appid/prefix detection, PE import check, inject/remove, Wine registry, backups
 halfsword_lab/bridge.py          state.json / commands.txt / mods.cfg
 halfsword_lab/mods.py            world mod definitions (keys = mods.cfg keys used by lab.cpp applyMods)
 halfsword_lab/demo.py            fake game for --demo
+halfsword_lab/save.py            GVAS reader + in-place editor; saveui.py = Save Editor page; demo_save.py = test/demo saves
+halfsword_lab/widgets.py         shared dialogs (BackupPrompt, EditValue, Confirm)
 native/src/dllmain.cpp           version.dll export forwarding, loader thread, ProcessEvent hook (game thread)
 native/src/ue.cpp                engine discovery + reflection (+ calibration)
 native/src/lab.cpp               characters, gear, coins, mods, commands, state.json, in-game backups
@@ -110,4 +119,5 @@ visit clone spawn vanish hide show reset scan_classes dump panic`.
 - End every reply with a progress tag like `(50% Completed Response)`.
 - No UE4SS / mod loaders / Cheat-Engine-style memory scanning. Self-contained DLL only.
 - Every change asks "Make Backup Before Applying Changes?"; `run.sh` asks y/n before installing anything.
-- GUI style follows https://github.com/thenameiscobmarley/ui-vault (dark, violet `#8b5cf6` / cyan `#22d3ee`).
+- Style: "clean dashboard" (sidebar nav, landing page, flat cards, compact controls), in both the terminal app
+  and the in-game menu; palette from https://github.com/thenameiscobmarley/ui-vault (violet `#8b5cf6` / cyan `#22d3ee`).

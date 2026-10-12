@@ -1,20 +1,32 @@
 # ⚔ Half Sword Lab
 
-A trainer and mod lab for **Half Sword**, with a terminal GUI and an in-game menu (press **`\`**).
-Pick any character (you, your mercenaries, opponents) and change their size, weight, speed, stats, armor,
-weapons and coins. Or switch on world mods like **Randomised Sizes Opponents**, **Matrix Mode** or
+A trainer, save editor and mod lab for **Half Sword**: a terminal dashboard plus an in-game menu (press
+**`\`**). Pick any character (you, your mercenaries, opponents) and change their size, weight, speed, stats,
+armor, weapons and coins. Or switch on world mods like **Randomised Sizes Opponents**, **Matrix Mode** or
 **Reverse Gravity**.
 
+Two editions:
+
 ```
-./run.sh          # Linux (KDE, Linux Mint, Steam Deck...), game running through Proton
-run.bat           # Windows
-./run.sh --demo   # look around with fake data, no game needed
+./run.sh             # full Lab: Save Editor + Live Lab (DLL + in-game menu)   (run.bat on Windows)
+./save-editor.sh     # Save Editor edition: only ever edits your save files    (save-editor.bat)
+./run.sh --demo      # look around with fake data, no game needed (works for both)
 ```
 
 The launcher lists what it needs (Python if missing, a private `.venv`, the
 [Textual](https://textual.textualize.io) package) and asks **y/n before installing anything**.
 
-## How it works
+## Save Editor (no DLL, nothing installed)
+
+Opens your Half Sword save slots (`.sav`, Unreal's GVAS format) with the game closed. Every value in the
+save is listed with tags like `#coins` `#mercenary` `#health` `#armor` `#weapon`, with filters for each.
+Numbers and true/false values can be edited (Enter), and the changes are written in place. The rest of the
+save is never rewritten, so anything the editor doesn't understand stays byte-for-byte the same. It reads
+both the classic and the UE5.4+ save formats, and was checked against real Unreal saves and the
+[uesave](https://github.com/trumank/uesave-rs) tool. Writing asks "Make Backup Before Applying Changes?" like
+everything else, and it refuses while Half Sword is running (the game would overwrite the save).
+
+## How the Live Lab works
 
 ```
  terminal GUI (Python)  ⇄  HalfSwordLab/bridge files  ⇄  version.dll (the Lab)  →  Half Sword
@@ -33,7 +45,8 @@ The launcher lists what it needs (Python if missing, a private `.venv`, the
 
 ## First run
 
-Open the **Setup** tab:
+The app opens on a **Home** page with a card for each part (Save Editor, Live Lab, Backups, Setup).
+Keys **1-7** jump between pages. For the Live Lab, open **Setup**:
 
 1. **Copy DLL to game files (with backup)**. Puts `version.dll` + a `HalfSwordLab` folder next to
    `HalfSwordUE5-Win64-Shipping.exe`. If a `version.dll` from another mod is already there, it is backed up
@@ -56,9 +69,11 @@ Open the **Setup** tab:
 
 ## What's in it
 
-| Tab | What you can do |
+| Page | What you can do |
 | --- | --- |
-| **Characters** | Everyone in the world, tagged `#player` `#mercenary` `#opponent` `#dead` `#modded` |
+| **Home** | Landing page: status cards for saves, live game, backups and setup, plus recent backups |
+| **Save Editor** | Save slots, every value tagged and filterable, edit numbers/flags, write with a backup prompt |
+| **Live Lab** | Everyone in the world, tagged `#player` `#mercenary` `#opponent` `#dead` `#modded` |
 | Body | Size, Weight (physics mass), Speed (per-character time), presets from *Pocket* to *Giant* |
 | Stats | Every number/flag on the character's blueprint (health, blood, consciousness, team...), tagged, editable |
 | Armor / Weapons | Gear on the character: giant/tiny, feather/heavy, hide, remove, spawn more |
@@ -66,6 +81,7 @@ Open the **Setup** tab:
 | Goofy | Launch to the sky, clone army, bring to me, teleport, freeze, hyper, ant, colossus, balloon, invisible |
 | **Mods** | Randomised Sizes Opponents, Opponent Sizes, Ever-Growing Opponents, Growth Spurt, Caffeine Lottery, Statues, Espresso Opponents, Paper Knights, Anvil Mode, Giant Weapons, Matrix Mode, Slow Motion, Stubborn, Gravity (Moon/Mars/Zero-G/Heavy/Reverse/Custom) |
 | **Backups** | All backups, newest first: restore, delete, back up now |
+| **Log** | What the Lab and the game reported |
 | **Setup** | Copy/remove the DLL, status checks, data dump for Claude |
 
 **F8** (in-game) is a panic button. It puts back everything the Lab changed and pauses mods until you

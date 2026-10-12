@@ -60,3 +60,10 @@ def char_tags(c: dict) -> list[str]:
     if is_modded(c):
         tags.append("modded")
     return tags
+
+
+def groups_of(name: str, limit: int = 2) -> list[str]:
+    """All matching group tags for a (possibly dotted) name, e.g. Mercenaries[0].Health -> mercenary, health."""
+    low = name.lower()
+    out = [t for t, words in GROUPS if any(w in low for w in words.split())]
+    return out[:limit] or ["misc"]
