@@ -1,0 +1,63 @@
+Screen { background: $background; }
+
+Header { background: $panel; color: $foreground; text-style: bold; }
+
+#left {
+    width: 42;
+    border: round $primary 40%;
+    background: $surface;
+    padding: 0 1;
+}
+#left .h { padding: 1 0 0 1; }
+#chars { height: 1fr; background: $surface; border: none; }
+#chars > .option-list--option-highlighted { background: $primary 30%; }
+#world { height: 1; padding-left: 1; }
+
+#right { padding: 0 1; }
+#char-title { height: 2; padding: 1 0 0 1; }
+
+.row { height: auto; margin: 1 0 0 0; }
+.row Button { margin-right: 1; min-width: 8; }
+.lbl { width: 8; padding: 1 0 0 1; text-style: bold; color: $secondary; }
+.num { width: 12; }
+.hint { color: $foreground 50%; padding: 1 1; }
+#body-info { padding: 1 1 0 1; }
+
+DataTable { height: 1fr; min-height: 6; background: $surface; }
+#stat-filter { margin-bottom: 1; }
+
+.spawn { width: 1fr; }
+.count { width: 8; }
+
+#goofy { grid-size: 3; grid-gutter: 1 2; padding: 1; height: auto; }
+#goofy Button { width: 100%; }
+
+#mods { padding: 0 1; }
+.mod {
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    background: $surface;
+    border-left: tall $primary 40%;
+}
+.mod:hover { border-left: tall $secondary; }
+.mod Switch { margin-right: 1; }
+.mod-text { width: 1fr; height: auto; }
+.plabel { padding: 1 1 0 2; color: $foreground 60%; }
+.param { width: 10; }
+#gravity { width: 26; }
+
+#setup-status { padding: 1; background: $surface; border: round $primary 25%; }
+#game-path { width: 1fr; }
+
+EditValue, Confirm { align: center middle; background: $background 70%; }
+#dialog {
+    width: 56;
+    height: auto;
+    padding: 1 2;
+    background: $panel;
+    border: thick $primary;
+}
+#dialog Input { margin-top: 1; }
+
+RichLog { background: $surface; padding: 0 1; }

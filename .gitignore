@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+dumps/
+mod/HalfSwordLab/bridge/*
+!mod/HalfSwordLab/bridge/.keep
