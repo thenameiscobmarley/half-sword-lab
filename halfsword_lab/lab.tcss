@@ -59,5 +59,11 @@ EditValue, Confirm { align: center middle; background: $background 70%; }
     border: thick $primary;
 }
 #dialog Input { margin-top: 1; }
+#dialog .change { padding: 1 0 0 0; }
+BackupPrompt { align: center middle; background: $background 70%; }
+BackupPrompt #dialog { width: 78; border: thick $secondary; }
+
+#backup-head { padding: 1 1 1 1; }
+#backups { height: 1fr; }
 
 RichLog { background: $surface; padding: 0 1; }

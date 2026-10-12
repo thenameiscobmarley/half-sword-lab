@@ -1,4 +1,4 @@
-"""File bridge between the terminal GUI and the in-game Lua mod."""
+"""File bridge between the terminal GUI and the in-game Lab DLL."""
 from __future__ import annotations
 
 import json

@@ -1,4 +1,4 @@
-"""World mods. Keys match mods.cfg entries read by the Lua side."""
+"""World mods. Keys match the mods.cfg entries the Lab DLL reads (native/src/lab.cpp applyMods)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -42,3 +42,7 @@ GRAVITY = [
     ("Normal", "normal"), ("Moon (1/6 g)", "moon"), ("Mars", "mars"), ("Zero-G", "zero"),
     ("Heavy (3 g)", "heavy"), ("Reverse (fall up!)", "reverse"), ("Custom", "custom"),
 ]
+
+# Mods that fight over the same thing: switching one on switches the others off.
+EXCLUSIVE = [("random_sizes", "opp_scale_on", "ever_growing"), ("freeze_opp", "hyper_opp", "caffeine"),
+             ("matrix", "slowmo")]

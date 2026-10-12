@@ -12,6 +12,9 @@ COLORS = {
     "team": CYAN, "speed": "#34d399", "physics": "#a78bfa", "misc": DIM,
     "opponents": "#f43f5e", "world": VIOLET, "chaos": "#e879f9", "weapons": "#fb923c",
     "experimental": "#facc15", "actor": MUTED, "component": MUTED, "bool": "#38bdf8",
+    # backups
+    "saves": CYAN, "gamefiles": "#fb923c", "manual": "#34d399", "in-game": VIOLET, "change": "#a78bfa",
+    "session": MUTED, "pre-inject": "#fb923c", "pre-restore": "#facc15", "demo": DIM,
 }
 
 GROUPS = [

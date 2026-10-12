@@ -1,5 +1,5 @@
 .venv/
 __pycache__/
 dumps/
-mod/HalfSwordLab/bridge/*
-!mod/HalfSwordLab/bridge/.keep
+native/build/
+native/test/fakeue.exe
